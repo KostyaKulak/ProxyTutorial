@@ -1,17 +1,14 @@
 package util;
 
-import com.google.gson.*;
 import net.lightbody.bmp.BrowserMobProxy;
 import net.lightbody.bmp.BrowserMobProxyServer;
 import net.lightbody.bmp.core.har.Har;
+import net.lightbody.bmp.proxy.CaptureType;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.firefox.FirefoxDriver;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.util.Map;
-import java.util.Scanner;
 
 
 public class HARParser {
@@ -19,39 +16,45 @@ public class HARParser {
     public static String getValue(WebDriver driver, String key, String url) {
         BrowserMobProxy proxy = new BrowserMobProxyServer();
         proxy.start(0);
+        switch (key) {
+            case "headers":
+                proxy.enableHarCaptureTypes(CaptureType.RESPONSE_HEADERS);
+                break;
+            case "body":
+                proxy.enableHarCaptureTypes(CaptureType.RESPONSE_CONTENT);
+                break;
+        }
+        proxy.addRequestFilter((httpRequest, httpMessageContents, httpMessageInfo) -> {
+            if (httpMessageInfo.getOriginalUrl().endsWith("/some-endpoint-to-intercept")) {
+                String messageContents = httpMessageContents.getTextContents();
+                String newContents = messageContents.replaceAll("original-string", "my-modified-string");
+                httpMessageContents.setTextContents(newContents);
+            }
+            return null;
+        });
+        proxy.addResponseFilter((response, contents, messageInfo) -> {
+            contents.setTextContents("This message body will appear in all responses!");
+        });
         proxy.newHar(url);
         driver.get(url);
-        Har har = proxy.endHar();
+        Har har = proxy.getHar();
         File file = new File(".har");
         try {
             har.writeTo(file);
         } catch (IOException e) {
             e.printStackTrace();
         }
-        Scanner scanner = null;
-        StringBuilder stringBuilder = new StringBuilder();
-        try {
-            scanner = new Scanner(file);
-            while (scanner.hasNext()) {
-                stringBuilder.append(scanner.nextLine()).append('\n');
-            }
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-        String jsonString = stringBuilder.toString();
-        JsonObject jsonObject = new JsonParser().parse(jsonString).getAsJsonObject();
         String result = "";
-        JsonElement object = jsonObject.get("log");
-        while (result.equals("")) {
-            if (object.isJsonObject()) {
-                for (Map.Entry<String, JsonElement> str : object.getAsJsonObject().entrySet()) {
-                    if (str.getKey().equals(key)) {
-                        result = str.getValue().toString();
-                        break;
-                    }
-                }
-            } else {
-                result = ((JsonObject) object).get(key).getAsString();
+        if (har.getLog().getEntries().isEmpty()) {
+            return "This site has empty har entries";
+        } else {
+            switch (key) {
+                case "headers":
+                    result = har.getLog().getEntries().get(0).getResponse().getHeaders().toString();
+                    break;
+                case "body":
+                    result = har.getLog().getEntries().get(0).getResponse().getContent().toString();
+                    break;
             }
         }
         return result;
@@ -59,7 +62,7 @@ public class HARParser {
 
     public static void main(String[] args) {
         WebDriver driver = new FirefoxDriver();
-        System.out.println(getValue(driver, "httpVersion", "https://www.igvita.com"));
+        System.out.println(getValue(driver, "headers", "http://www.yahoo.com"));
         driver.quit();
         System.exit(0);
     }
